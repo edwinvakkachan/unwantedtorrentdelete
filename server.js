@@ -25,31 +25,59 @@ async function checkQbitAvailability() {
             `${QBIT_URL}/api/v2/app/version`,
             {
                 timeout: 5000,
+                validateStatus: () => true,
             }
         );
 
         console.log(
-            `✓ qBittorrent is available`
+            `✓ qBittorrent responded`
         );
 
         console.log(
-            `  Version: ${response.data}`
+            `  HTTP status: ${response.status}`
         );
 
-        return true;
+        if (response.status === 200) {
+            console.log(
+                `  Version: ${response.data}`
+            );
+
+            return true;
+        }
+
+        if (response.status === 403) {
+            console.log(
+                '⚠ qBittorrent is reachable but returned 403'
+            );
+
+            console.log(
+                '  Continuing to the login test...'
+            );
+
+            return true;
+        }
+
+        console.error(
+            `✗ Unexpected HTTP status: ${response.status}`
+        );
+
+        return false;
 
     } catch (error) {
 
         console.error(
-            `✗ qBittorrent is NOT available`
+            `✗ qBittorrent is NOT reachable`
         );
 
         if (error.code === 'ECONNREFUSED') {
             console.error('  Connection refused.');
+
         } else if (error.code === 'ETIMEDOUT') {
             console.error('  Connection timed out.');
+
         } else if (error.code === 'ENOTFOUND') {
             console.error('  Host could not be found.');
+
         } else {
             console.error(
                 `  ${error.message}`
