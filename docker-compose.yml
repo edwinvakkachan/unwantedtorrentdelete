@@ -1,0 +1,14 @@
+services:
+  unwantedtorrentdelete:
+    build: .
+    container_name: unwantedtorrentdelete   
+    restart: no
+    environment:
+      QBIT_URL: ${QBIT_URL}
+      QBIT_USERNAME: ${QBIT_USERNAME}
+      QBIT_PASSWORD:  ${QBIT_PASSWORD}
+      MONGO_URI: ${MONGO_URI}
+      MONGO_DB: ${MONGO_DB}
+      MONGO_COLLECTION:  ${MONGO_COLLECTION}
+      DELETE_FILES: ${DELETE_FILES}
+
