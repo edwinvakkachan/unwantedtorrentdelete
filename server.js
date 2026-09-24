@@ -17,9 +17,64 @@ const DELETE_FILES = process.env.DELETE_FILES === 'true';
 // Check whether qBittorrent is available
 // ======================================================
 
+async function gettorrentdetails(){
+    let response;
+
+try {
+    console.log('\nGetting torrents from qBittorrent...');
+
+    response = await qbit.get(
+        '/api/v2/torrents/info',
+        {
+            timeout: 15000,
+        }
+    );
+
+    console.log(
+        `✓ qBittorrent returned HTTP ${response.status}`
+    );
+
+} catch (error) {
+
+    console.error('\n✗ Failed to get torrents');
+
+    console.error(
+        'HTTP status:',
+        error.response?.status || 'none'
+    );
+
+    console.error(
+        'Response headers:',
+        error.response?.headers || 'none'
+    );
+
+    console.error(
+        'Response data:',
+        JSON.stringify(
+            error.response?.data,
+            null,
+            2
+        )
+    );
+
+    console.error(
+        'Error code:',
+        error.code
+    );
+
+    console.error(
+        'Error message:',
+        error.message
+    );
+
+    process.exit(1);
+}
+
+const torrents = response.data;
+}
+
 async function checkQbitAvailability() {
     console.log(`Checking qBittorrent: ${QBIT_URL}`);
-
     try {
         const response = await axios.get(
             `${QBIT_URL}/api/v2/app/version`,
@@ -181,7 +236,7 @@ async function main() {
     console.log(' qBittorrent Keyword Cleanup');
     console.log('================================\n');
 
-
+await gettorrentdetails();
     // --------------------------------------------------
     // STEP 1: Check qBittorrent FIRST
     // --------------------------------------------------
