@@ -8,9 +8,11 @@ const QBIT_PASSWORD = process.env.QBIT_PASSWORD;
 
 const MONGO_URI = process.env.MONGO_URI;
 const MONGO_DB = process.env.MONGO_DB;
-const MONGO_COLLECTION = process.env.MONGO_COLLECTION || 'keywords';
+const MONGO_COLLECTION =
+    process.env.MONGO_COLLECTION || 'keywords';
 
-const DELETE_FILES = process.env.DELETE_FILES === 'true';
+const DELETE_FILES =
+    process.env.DELETE_FILES === 'true';
 
 
 // ======================================================
@@ -18,39 +20,83 @@ const DELETE_FILES = process.env.DELETE_FILES === 'true';
 // ======================================================
 
 async function checkQbitAvailability() {
-    console.log(`Checking qBittorrent: ${QBIT_URL}`);
+
+    console.log(
+        `Checking qBittorrent: ${QBIT_URL}`
+    );
 
     try {
+
         const response = await axios.get(
             `${QBIT_URL}/api/v2/app/version`,
             {
                 timeout: 5000,
+                validateStatus: () => true,
             }
         );
 
         console.log(
-            `✓ qBittorrent is available`
+            '✓ qBittorrent responded'
         );
 
         console.log(
-            `  Version: ${response.data}`
+            `  HTTP status: ${response.status}`
         );
 
-        return true;
+        if (response.status === 200) {
+
+            console.log(
+                `  Version: ${response.data}`
+            );
+
+            return true;
+        }
+
+        if (response.status === 403) {
+
+            console.log(
+                '⚠ qBittorrent is reachable but returned 403'
+            );
+
+            console.log(
+                '  Continuing to the login test...'
+            );
+
+            return true;
+        }
+
+        console.error(
+            `✗ Unexpected HTTP status: ${response.status}`
+        );
+
+        return false;
 
     } catch (error) {
 
         console.error(
-            `✗ qBittorrent is NOT available`
+            '✗ qBittorrent is NOT reachable'
         );
 
         if (error.code === 'ECONNREFUSED') {
-            console.error('  Connection refused.');
+
+            console.error(
+                '  Connection refused.'
+            );
+
         } else if (error.code === 'ETIMEDOUT') {
-            console.error('  Connection timed out.');
+
+            console.error(
+                '  Connection timed out.'
+            );
+
         } else if (error.code === 'ENOTFOUND') {
-            console.error('  Host could not be found.');
+
+            console.error(
+                '  Host could not be found.'
+            );
+
         } else {
+
             console.error(
                 `  ${error.message}`
             );
@@ -69,9 +115,12 @@ async function loginToQbit() {
 
     const client = axios.create({
         baseURL: QBIT_URL,
-        withCredentials: true,
-        timeout: 10000,
+        timeout: 15000,
     });
+
+    console.log(
+        '\nLogging into qBittorrent...'
+    );
 
     const response = await client.post(
         '/api/v2/auth/login',
@@ -88,12 +137,61 @@ async function loginToQbit() {
     );
 
     if (response.data !== 'Ok.') {
+
         throw new Error(
             `qBittorrent login failed: ${response.data}`
         );
     }
 
-    console.log('✓ Logged into qBittorrent');
+
+    // --------------------------------------------------
+    // Get SID cookie returned by qBittorrent
+    // --------------------------------------------------
+
+    const cookies =
+        response.headers['set-cookie'];
+
+    if (!cookies || cookies.length === 0) {
+
+        throw new Error(
+            'qBittorrent login succeeded but no cookie was returned.'
+        );
+    }
+
+
+    const sidCookie =
+        cookies.find(cookie =>
+            cookie.startsWith('SID=')
+        );
+
+    if (!sidCookie) {
+
+        throw new Error(
+            'qBittorrent login succeeded but SID cookie was not found.'
+        );
+    }
+
+
+    const sid =
+        sidCookie.split(';')[0];
+
+
+    // --------------------------------------------------
+    // Send SID with every future request
+    // --------------------------------------------------
+
+    client.defaults.headers.common['Cookie'] =
+        sid;
+
+
+    console.log(
+        '✓ Logged into qBittorrent'
+    );
+
+    console.log(
+        '✓ qBittorrent SID cookie received'
+    );
+
 
     return client;
 }
@@ -105,40 +203,219 @@ async function loginToQbit() {
 
 async function getKeywordsFromMongo() {
 
-    const client = new MongoClient(MONGO_URI);
+    const client =
+        new MongoClient(MONGO_URI);
 
     try {
 
         await client.connect();
 
-        console.log('✓ Connected to MongoDB Atlas');
+        console.log(
+            '✓ Connected to MongoDB Atlas'
+        );
 
-        const db = client.db(MONGO_DB);
+        const db =
+            client.db(MONGO_DB);
 
         const collection =
             db.collection(MONGO_COLLECTION);
 
         const documents =
-            await collection.find({}).toArray();
+            await collection
+                .find({})
+                .toArray();
+
 
         const keywords = documents
+
             .map(doc => doc.keyword)
+
             .filter(
                 keyword =>
                     typeof keyword === 'string' &&
                     keyword.trim() !== ''
             )
+
             .map(keyword =>
                 keyword.trim().toLowerCase()
             );
 
-        // Remove duplicates
-        return [...new Set(keywords)];
+
+        // Remove duplicate keywords
+
+        return [
+            ...new Set(keywords)
+        ];
 
     } finally {
 
         await client.close();
+    }
+}
 
+
+// ======================================================
+// Get torrents from qBittorrent
+// ======================================================
+
+async function getTorrents(qbit) {
+
+    console.log(
+        '\nGetting torrents from qBittorrent...'
+    );
+
+    try {
+
+        const response =
+            await qbit.get(
+                '/api/v2/torrents/info'
+            );
+
+
+        console.log(
+            `✓ qBittorrent returned HTTP ${response.status}`
+        );
+
+
+        if (!Array.isArray(response.data)) {
+
+            throw new Error(
+                'qBittorrent returned an unexpected response.'
+            );
+        }
+
+
+        return response.data;
+
+    } catch (error) {
+
+        console.error(
+            '\n✗ Failed to get torrents from qBittorrent'
+        );
+
+        console.error(
+            `  HTTP status: ${
+                error.response?.status || 'none'
+            }`
+        );
+
+        console.error(
+            `  Response: ${
+                typeof error.response?.data === 'string'
+                    ? JSON.stringify(error.response.data)
+                    : JSON.stringify(
+                        error.response?.data,
+                        null,
+                        2
+                    )
+            }`
+        );
+
+        console.error(
+            `  Error code: ${error.code || 'none'}`
+        );
+
+        console.error(
+            `  Error message: ${error.message}`
+        );
+
+        throw error;
+    }
+}
+
+
+// ======================================================
+// Delete torrents
+// ======================================================
+
+async function deleteTorrents(
+    qbit,
+    matches
+) {
+
+    const hashes =
+        matches
+            .map(torrent => torrent.hash)
+            .join('|');
+
+
+    console.log(
+        `\nDeleting ${matches.length} torrent(s)...`
+    );
+
+
+    try {
+
+        const response =
+            await qbit.post(
+                '/api/v2/torrents/delete',
+
+                new URLSearchParams({
+                    hashes,
+
+                    deleteFiles:
+                        DELETE_FILES
+                            ? 'true'
+                            : 'false',
+                }),
+
+                {
+                    headers: {
+                        'Content-Type':
+                            'application/x-www-form-urlencoded',
+                    },
+                }
+            );
+
+
+        console.log(
+            `✓ Delete API returned HTTP ${response.status}`
+        );
+
+
+        console.log(
+            `✓ Deleted ${matches.length} torrent(s)`
+        );
+
+
+        if (DELETE_FILES) {
+
+            console.log(
+                '⚠ Downloaded files were also deleted.'
+            );
+
+        } else {
+
+            console.log(
+                '✓ Downloaded files were kept.'
+            );
+        }
+
+    } catch (error) {
+
+        console.error(
+            '\n✗ Failed to delete torrents'
+        );
+
+        console.error(
+            `  HTTP status: ${
+                error.response?.status || 'none'
+            }`
+        );
+
+        console.error(
+            `  Response: ${
+                typeof error.response?.data === 'string'
+                    ? JSON.stringify(error.response.data)
+                    : JSON.stringify(
+                        error.response?.data,
+                        null,
+                        2
+                    )
+            }`
+        );
+
+        throw error;
     }
 }
 
@@ -149,17 +426,27 @@ async function getKeywordsFromMongo() {
 
 async function main() {
 
-    console.log('\n================================');
-    console.log(' qBittorrent Keyword Cleanup');
-    console.log('================================\n');
+    console.log(
+        '\n================================'
+    );
+
+    console.log(
+        ' qBittorrent Keyword Cleanup'
+    );
+
+    console.log(
+        '================================\n'
+    );
 
 
-    // --------------------------------------------------
-    // STEP 1: Check qBittorrent FIRST
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 1
+    // Check qBittorrent FIRST
+    // ==================================================
 
     const qbitAvailable =
         await checkQbitAvailability();
+
 
     if (!qbitAvailable) {
 
@@ -175,15 +462,17 @@ async function main() {
     }
 
 
-    // --------------------------------------------------
-    // STEP 2: Login
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 2
+    // Login
+    // ==================================================
 
     let qbit;
 
     try {
 
-        qbit = await loginToQbit();
+        qbit =
+            await loginToQbit();
 
     } catch (error) {
 
@@ -204,9 +493,10 @@ async function main() {
     }
 
 
-    // --------------------------------------------------
-    // STEP 3: Get keywords from MongoDB
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 3
+    // MongoDB
+    // ==================================================
 
     let keywords;
 
@@ -221,7 +511,9 @@ async function main() {
             '\n✗ Could not read MongoDB'
         );
 
-        console.error(error.message);
+        console.error(
+            error.message
+        );
 
         console.log(
             '\nScript stopped. Nothing was changed.'
@@ -245,41 +537,60 @@ async function main() {
         `\n✓ Loaded ${keywords.length} keyword(s):`
     );
 
+
     keywords.forEach(keyword => {
-        console.log(`  - ${keyword}`);
+
+        console.log(
+            `  - ${keyword}`
+        );
+
     });
 
 
-    // --------------------------------------------------
-    // STEP 4: Get torrents
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 4
+    // Get torrents
+    // ==================================================
 
-    const response =
-        await qbit.get(
-            '/api/v2/torrents/info'
+    let torrents;
+
+    try {
+
+        torrents =
+            await getTorrents(qbit);
+
+    } catch (error) {
+
+        console.log(
+            '\nScript stopped. Nothing was changed.'
         );
 
-    const torrents = response.data;
+        process.exit(1);
+    }
+
 
     console.log(
         `\n✓ qBittorrent contains ${torrents.length} torrent(s)`
     );
 
 
-    // --------------------------------------------------
-    // STEP 5: Find matching torrents
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 5
+    // Find matching torrents
+    // ==================================================
 
-    const matches = torrents.filter(torrent => {
+    const matches =
+        torrents.filter(torrent => {
 
-        const torrentName =
-            torrent.name.toLowerCase();
+            const torrentName =
+                torrent.name.toLowerCase();
 
-        return keywords.some(keyword =>
-            torrentName.includes(keyword)
-        );
 
-    });
+            return keywords.some(keyword =>
+                torrentName.includes(keyword)
+            );
+
+        });
 
 
     if (matches.length === 0) {
@@ -292,13 +603,15 @@ async function main() {
     }
 
 
-    // --------------------------------------------------
-    // STEP 6: Display matches
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 6
+    // Display matches
+    // ==================================================
 
     console.log(
         `\n⚠ Found ${matches.length} matching torrent(s):\n`
     );
+
 
     matches.forEach((torrent, index) => {
 
@@ -309,78 +622,73 @@ async function main() {
                     .includes(keyword)
             );
 
+
         console.log(
             `${index + 1}. ${torrent.name}`
         );
+
 
         console.log(
             `   Matched: ${matchedKeywords.join(', ')}`
         );
 
+
         console.log(
             `   Hash: ${torrent.hash}`
         );
 
+
         console.log(
-            `   Size: ${(torrent.size / 1024 / 1024).toFixed(2)} MB`
+            `   Size: ${
+                (
+                    torrent.size /
+                    1024 /
+                    1024
+                ).toFixed(2)
+            } MB`
         );
+
 
         console.log(
             `   State: ${torrent.state}`
         );
 
+
         console.log('');
     });
 
 
-    // --------------------------------------------------
-    // STEP 7: Delete matching torrents
-    // --------------------------------------------------
+    // ==================================================
+    // STEP 7
+    // Delete
+    // ==================================================
 
-    const hashes =
-        matches
-            .map(torrent => torrent.hash)
-            .join('|');
+    try {
 
-    await qbit.post(
-        '/api/v2/torrents/delete',
-        new URLSearchParams({
-            hashes,
-            deleteFiles:
-                DELETE_FILES
-                    ? 'true'
-                    : 'false',
-        }),
-        {
-            headers: {
-                'Content-Type':
-                    'application/x-www-form-urlencoded',
-            },
-        }
-    );
+        await deleteTorrents(
+            qbit,
+            matches
+        );
+
+    } catch (error) {
+
+        console.log(
+            '\nScript stopped.'
+        );
+
+        process.exit(1);
+    }
 
 
     console.log(
-        `✓ Deleted ${matches.length} torrent(s)`
+        '\nDone.'
     );
-
-
-    if (DELETE_FILES) {
-
-        console.log(
-            '⚠ Downloaded files were also deleted.'
-        );
-
-    } else {
-
-        console.log(
-            '✓ Downloaded files were kept.'
-        );
-    }
-
-    console.log('\nDone.');
 }
 
+
+// ======================================================
+// Start
+// ======================================================
 
 main().catch(error => {
 
@@ -388,9 +696,26 @@ main().catch(error => {
         '\nUnexpected error:'
     );
 
-    console.error(
-        error.response?.data ||
-        error.message
-    );
+
+    if (error.response) {
+
+        console.error(
+            'HTTP status:',
+            error.response.status
+        );
+
+        console.error(
+            'Response:',
+            JSON.stringify(
+                error.response.data
+            )
+        );
+
+    } else {
+
+        console.error(
+            error.message
+        );
+    }
 
 });
